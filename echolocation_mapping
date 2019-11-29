@@ -1,0 +1,375 @@
+#MIT License
+#Ty Lofstrom BSME ME580 Graduate School Project Code
+#utilizes the PCA9865 driver board for wheel motor control.
+#HCSR04 Ultrasonic senor mounted to an SG90 servo
+#RPi3B+ board 
+
+from __future__ import division
+import matplotlib
+matplotlib.use('Agg')
+import time
+import math
+from tkinter import *
+import PCA9685
+import RPi.GPIO as GPIO
+
+speed1 = 1050  #left wheel speed
+speed2 = 1000  #right wheel speed
+
+#PCA9685 board connections
+ena = 8
+in1 = 9
+in2 = 10
+in3 = 11
+in4 = 12
+enb = 13
+
+Servo = 12
+
+GPIO_TRIGGER = 16
+GPIO_ECHO = 18
+
+#Initialise the PCA9685 using the default address (0x40).
+pwm = PCA9685.PCA9685()
+#Set frequency to 60hz.
+pwm.set_pwm_freq(60)
+#Set motor speed. speed max is 4095,min is 0
+GPIO.setmode(GPIO.BOARD)
+GPIO.setwarnings(False)
+
+GPIO.setup(GPIO_TRIGGER, GPIO.OUT)
+GPIO.setup(GPIO_ECHO, GPIO.IN)
+
+GPIO.setup(Servo, GPIO.OUT)
+servo = GPIO.PWM(Servo, 50)
+
+
+
+def set_speed(lspeed,rspeed):
+    pwm.set_pwm(ena,0,lspeed)
+    pwm.set_pwm(enb,0,rspeed)
+
+#Robot car forward
+def goForward(inches):
+    set_speed(speed2,speed1)
+    pwm.set_pwm(in1,0,4095)   #IN1
+    pwm.set_pwm(in2,0,0)      #IN2
+    pwm.set_pwm(in3,0,4095)   #IN3
+    pwm.set_pwm(in4,0,0)      #IN4
+    time.sleep(inches / 11)
+
+#Robot car backwards
+def goBack():
+    set_speed(speed1,speed1)
+    pwm.set_pwm(in1,0,0)      #IN1
+    pwm.set_pwm(in2,0,4095)   #IN2
+    pwm.set_pwm(in3,0,0)      #IN3
+    pwm.set_pwm(in4,0,4095)   #IN4
+   # time.sleep(inches / 11)
+
+#Robot car turn left
+def turnLeft(inches):
+    set_speed(speed2, speed2)
+
+    pwm.set_pwm(in1, 0, 4095)  # IN1
+    pwm.set_pwm(in2, 0, 0)  # IN2
+
+    pwm.set_pwm(in3, 0, 0)  # IN3
+    pwm.set_pwm(in4, 0, 4095)  # IN4
+    time.sleep(inches / 11)
+
+#Robot turn right
+def turnRight():
+    set_speed(speed2, speed2)
+
+    pwm.set_pwm(in1, 0, 0)  # IN1
+    pwm.set_pwm(in2, 0, 4095)  # IN2
+
+    pwm.set_pwm(in3, 0, 4095)  # IN3
+    pwm.set_pwm(in4, 0, 0)  # IN4
+
+#Robot stop move
+def stop():
+    set_speed(0, 0)
+
+def distance(x0, y0, x1, y1):
+    return ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+
+
+def make2DList(rows, cols, val):
+    a = []
+    for row in range(rows): a += [[val] * cols]
+    return a
+
+
+def sonarDistance():
+    # set Trigger to HIGH
+    GPIO.output(GPIO_TRIGGER, True)
+
+    # set Trigger after 0.01ms to LOW
+    time.sleep(0.00001)
+    GPIO.output(GPIO_TRIGGER, False)
+
+    StartTime = time.time()
+    StopTime = time.time()
+
+   # save StartTime
+    while GPIO.input(GPIO_ECHO) == 0:
+        StartTime = time.time()
+
+    # save time of arrival
+    while GPIO.input(GPIO_ECHO) == 1:
+        StopTime = time.time()
+
+        # time difference between start and arrival
+        TimeElapsed = StopTime - StartTime
+    # multiply with the sonic speed (34300 cm/s)
+    # and divide by 2, because there and back
+    distance = (TimeElapsed * 34300) / 2
+
+    return distance
+
+# Used to draw the arcs representing the locus of possible points that the
+# sonar sensor could have detected
+def drawSemiCircle(canvas, data, rad, cx, cy, angle):
+    angle = math.pi / 180 * angle
+    ultraSonicAngle = math.pi / 180 * data.ultraSonicAngle
+
+    # Represent corners of rectangle that surround the arc
+    x0 = cx + rad * math.cos(angle - ultraSonicAngle / 2)
+    y0 = cy + rad * math.sin(angle - ultraSonicAngle / 2)
+    x1 = (cx + rad * math.cos(angle + ultraSonicAngle / 2) +
+          (rad - rad * math.cos(ultraSonicAngle / 2)) * math.cos(angle))
+    y1 = (cy + rad * math.sin(angle + ultraSonicAngle / 2) +
+          (rad - rad * math.cos(ultraSonicAngle / 2)) * math.sin(angle))
+
+    canvas.create_arc(cx - rad, cy - rad, cx + rad, cy + rad,
+                      start=(angle - ultraSonicAngle / 2) * 180 / math.pi,
+                      extent=ultraSonicAngle * 180 / math.pi,
+                      style=ARC, outline='light gray')
+
+
+def drawArcs(canvas, data):
+    # draw arcs representing signal received from sonar sensor
+    # light gray for arcs
+    for i in range(len(data.semiCircles)):
+        for j in range(len(data.semiCircles[i])):
+            drawSemiCircle(canvas, data, data.semiCircles[i][j][0],
+                           data.semiCircles[i][j][1],
+                           data.semiCircles[i][j][2],
+                           data.angle[i])
+
+def drawGrid(canvas, data):
+    for x in range(0, data.width, 20):
+        canvas.create_line(x, 0, x, data.height, fill='light blue')
+    for y in range(0, data.height, 20):
+        canvas.create_line(0, y, data.width, y, fill='light blue')
+    canvas.create_text(10, 20, text='Scale: 20 cm per grid', anchor=NW,
+                       fill="blue", font="Arial 18 bold")
+
+
+def drawRobotPath(canvas, data):
+    #robot path in red
+    for i in range(len(data.robotPath)):
+        canvas.create_line(data.robotPath[i][0], data.robotPath[i][1],
+                           data.robotPath[i][2], data.robotPath[i][3],
+                           fill='green')
+
+def drawBoundaryLines(canvas, data):
+    # draw tangent lines connecting arcs
+    for i in range(len(data.connectingLines)):
+        for j in range(len(data.connectingLines[i]) - 1):
+            # imaginary numbers and noted real parts
+            canvas.create_line(data.connectingLines[i][j][0].real,
+                               data.height - data.connectingLines[i][j][1].real,
+                               data.connectingLines[i][j][2].real,
+                               data.height - data.connectingLines[i][j][3].real)
+
+
+# Used to plot the path of the robot
+def addPathLine(data):
+    cx = data.semiCircles[0][-2][1]
+    cy = data.semiCircles[0][-2][2]
+    cx_PlusOne = data.semiCircles[0][-1][1]
+    cy_PlusOne = data.semiCircles[0][-1][2]
+    data.robotPath.append((cx, cy, cx_PlusOne, cy_PlusOne))
+
+
+# "Echolocation-From range to outline segments" by Philip John McKerrow
+
+def addLine(data):
+    for i in range(len(data.semiCircles)):
+
+        r_t = data.semiCircles[i][-2][0]
+        r_tPlusOne = data.semiCircles[i][-1][0]
+
+        d = distance(data.semiCircles[i][-1][1], data.semiCircles[i][-1][2],
+                     data.semiCircles[i][-2][1], data.semiCircles[i][-2][2])
+
+        alpha = data.angle[i] * math.pi / 180
+        beta = data.ultraSonicAngle / 2 * math.pi / 180
+
+        low = min(-d * math.cos(alpha + beta), -d * math.cos(alpha - beta))
+        high = max(-d * math.cos(alpha + beta), -d * math.cos(alpha - beta))
+
+        sgn = abs(data.angle[i]) / data.angle[i]
+
+        if ((r_tPlusOne - r_t > low) and (r_tPlusOne - r_t < high)
+                and (r_t ** 2) > 1):
+
+            e = d * r_tPlusOne / (r_tPlusOne - r_t)
+            m = sgn * (((e ** 2) / (r_t ** 2) - 1) ** (1 / 2))
+
+            x_t = -e / (1 + m ** 2) + data.semiCircles[i][-2][1]
+            y_t = -e * m / (1 + m ** 2) + data.semiCircles[i][-2][2]
+            x_tPlusOne = (d * m ** 2 - e) / (1 + m ** 2) + data.semiCircles[i][-2][1]
+            y_tPlusOne = (-d * m - e * m) / (1 + m ** 2) + data.semiCircles[i][-2][2]
+
+ data.connectingLines[i].append((x_t, y_t, x_tPlusOne, y_tPlusOne))
+        else:
+            # placeholder value
+            data.connectingLines[i].append((0, 0, 0, 0))
+
+
+servo.start(7)  # Initialize servo position before continuing
+
+# Tkinter GUI Interface
+def init(data):
+    data.rad = 0
+    data.cx = 0
+    data.cy = data.height / 2  # begin plotting in center of screen
+    data.angle = [90, 60, 30, -30, -60, -90]  # degrees
+    data.servoFrequency = [21, 17.17, 14.33, 8.67, 5.83, 3.5]
+    data.ultraSonicAngle = 20  # degrees
+    data.semiCircles = make2DList(len(data.angle), 1, (data.rad, data.cx, data.cy))
+    data.connectingLines = [[]] * len(data.angle)
+    data.robotPath = []
+    data.paused = False
+
+
+def mousePressed(event, data):
+    # use event.x and event.y
+    pass
+
+
+def keyPressed(event, data):
+    # use event.char and event.keysym
+    pass
+#Reset PCA9685's all channels
+def destroy():
+    pwm.set_all_pwm(0,0)
+
+def timerFired(data):
+    # Pause timerFired to allow the robot to gather information
+    data.paused = True
+
+    # Check if obstacles in front
+    servo.ChangeDutyCycle(7)
+    time.sleep(1)  # Give a second for the servo to move
+    d = sonarDistance()
+    print("Distance in front is", d)
+
+    if d < 70:
+        # Infinite loop when the robot cannot go any further
+        while True:
+            print("Stop you are gonna die!")
+
+            # If no obstacles in front, move forward
+    time.sleep(1)
+    destroy()
+    goForward(11)
+
+    print("Moving forward")
+    data.cx += 21  # manually measured distance is actually ~21 cm per move
+    time.sleep(2)  # Give a second for the robot to move
+    stop()
+    # defined for the sake of clarity
+    cx = data.cx
+    cy = data.cy
+
+ # sweep the room using the servo motor and sonar sensor
+    for i in range(len(data.angle)):
+        servo.ChangeDutyCycle(data.servoFrequency[i])
+        time.sleep(1)  # Give a second for the servo to move
+        rad = sonarDistance()
+        data.semiCircles[i].append((rad, cx, cy))
+
+    # create tangent lines and robot path lines based on new data
+    for i in range(len(data.semiCircles)):
+        if len(data.semiCircles[i]) > 1:
+            addLine(data)
+            addPathLine(data)
+
+    # resume Tkinter
+    data.paused = False
+
+
+def redrawAll(canvas, data):
+    drawGrid(canvas, data)
+
+    drawArcs(canvas, data)
+
+    drawBoundaryLines(canvas, data)
+
+    drawRobotPath(canvas, data)
+
+def run(width=300, height=300):
+    def redrawAllWrapper(canvas, data):
+        canvas.delete(ALL)
+        canvas.create_rectangle(0, 0, data.width, data.height,
+                                fill='white', width=0)
+        redrawAll(canvas, data)
+        canvas.update()
+
+    def mousePressedWrapper(event, canvas, data):
+        mousePressed(event, data)
+        redrawAllWrapper(canvas, data)
+
+    def keyPressedWrapper(event, canvas, data):
+        keyPressed(event, data)
+        redrawAllWrapper(canvas, data)
+
+    def timerFiredWrapper(canvas, data):
+        timerFired(data)
+        redrawAllWrapper(canvas, data)
+        # pause, then call timerFired again
+        canvas.after(data.timerDelay, timerFiredWrapper, canvas, data)
+
+    # Set up data and call init
+    class Struct(object): pass
+
+    data = Struct()
+    data.width = width
+    data.height = height
+    data.timerDelay = 1000  # milliseconds
+    init(data)
+    # create the root and the canvas
+    root = Tk()
+    canvas = Canvas(root, width=data.width, height=data.height)
+    canvas.pack()
+    # set up events
+    root.bind("<Button-1>", lambda event:
+    mousePressedWrapper(event, canvas, data))
+    root.bind("<Key>", lambda event:
+    keyPressedWrapper(event, canvas, data))
+    timerFiredWrapper(canvas, data)
+
+    # and launch the app
+    root.mainloop()  # blocks until window is closed
+    print("bye!")
+
+
+run(400, 600)
+
+
+
+
+def destroy():
+    pwm.set_all_pwm(0, 0)
+
+
+
+    #except KeyboardInterrupt:
+        #robot car stop
+       # destroy()
+
